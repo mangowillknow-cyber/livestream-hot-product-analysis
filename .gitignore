@@ -1,0 +1,22 @@
+# 数据文件（需用户自行下载）
+data/raw/
+data/processed/
+
+# 中间产物（运行脚本后自动生成）
+figures/
+analysis_report.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
