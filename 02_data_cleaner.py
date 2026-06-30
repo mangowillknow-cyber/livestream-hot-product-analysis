@@ -182,7 +182,7 @@ def clean_data(df):
 
     # 时段字段统一编码
     if 'starthours' in df_clean.columns:
-        time_map = {'morning': '上午', 'noon': '中午', 'afternoon': '下午'}
+        time_map = {'morning': '上午', 'noon': '中午', 'afternoon': '下午', 'evening': '晚上'}
         df_clean['时段'] = df_clean['starthours'].map(time_map).fillna(df_clean['starthours'])
         print(f"  starthours -> 时段（中文标签）")
 

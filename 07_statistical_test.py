@@ -31,10 +31,25 @@ PROCESSED_DIR = os.path.join(PROJECT_DIR, 'data', 'processed')
 FIGURES_DIR = os.path.join(PROJECT_DIR, 'figures')
 
 
+
+def restore_categorical(df):
+    """CSV 读取后恢复 Categorical 列的正确排序"""
+    if '价格区间' in df.columns:
+        order = ['0-50', '50-100', '100-200', '200-500', '500-1000', '1000+']
+        df['价格区间'] = pd.Categorical(df['价格区间'], categories=order, ordered=True)
+    if '讲解时长区间' in df.columns:
+        order = ['<2分钟', '2-5分钟', '5-10分钟', '10分钟+']
+        df['讲解时长区间'] = pd.Categorical(df['讲解时长区间'], categories=order, ordered=True)
+    if '直播间规模' in df.columns:
+        order = ['小直播间(<500)', '中型(500-2K)', '大型(2K-5K)', '头部(5K+)']
+        df['直播间规模'] = pd.Categorical(df['直播间规模'], categories=order, ordered=True)
+    return df
+
 def load_data():
     """加载数据"""
     path = os.path.join(PROCESSED_DIR, 'burst_data.csv')
     df = pd.read_csv(path, encoding='utf-8')
+    df = restore_categorical(df)
     print(f"加载数据: {df.shape[0]} 行  x  {df.shape[1]} 列")
     return df
 
@@ -94,7 +109,8 @@ def hypothesis_test_1(df):
     if is_normal_b and is_normal_n:
         # 正态 -> 独立样本T检验（单侧）
         t_stat, p_two = stats.ttest_ind(burst_price, normal_price, equal_var=False)
-        p_one = p_two / 2  # 单侧 p 值
+        # 单侧 p 值：仅当 t < 0（爆品价格更低）时 p_one = p_two/2
+        p_one = p_two / 2 if t_stat < 0 else 1 - p_two / 2
         test_name = "Welch T检验（单侧）"
         print(f"\n{test_name}:")
         print(f"  t统计量 = {t_stat:.4f}")
@@ -110,13 +126,18 @@ def hypothesis_test_1(df):
         print(f"  双侧p值 = {p_two:.4e}")
         print(f"  单侧p值 (H1: 爆品价格 < 普通品) = {p_one:.4e}")
 
-    # 均值差与置信区间
+    # 均值差与置信区间（使用 Welch df 近似，不依赖正态假设）
     diff = burst_price.mean() - normal_price.mean()
     se = np.sqrt(burst_price.var() / len(burst_price) + normal_price.var() / len(normal_price))
-    ci_lower = diff - 1.96 * se
-    ci_upper = diff + 1.96 * se
+    # Welch-Satterthwaite 自由度
+    v_b = burst_price.var() / len(burst_price)
+    v_n = normal_price.var() / len(normal_price)
+    df_welch = (v_b + v_n)**2 / (v_b**2 / (len(burst_price) - 1) + v_n**2 / (len(normal_price) - 1))
+    t_crit = stats.t.ppf(0.975, df_welch)
+    ci_lower = diff - t_crit * se
+    ci_upper = diff + t_crit * se
     print(f"\n均值差: {diff:.2f} 元")
-    print(f"95%置信区间: [{ci_lower:.2f}, {ci_upper:.2f}]")
+    print(f"95%置信区间 (Welch): [{ci_lower:.2f}, {ci_upper:.2f}]")
 
     # 效应量 (Cohen's d)
     pooled_std = np.sqrt(((len(burst_price) - 1) * burst_price.var() +
@@ -271,8 +292,8 @@ def plot_test_results(df):
     axes[0].set_title('价格分布（带KDE）', fontsize=12)
     axes[0].set_xlabel('价格（元）')
 
-    # 图2：讲解时长分布对比
-    sns.histplot(data=df_plot, x='popduration', hue='爆品标签', ax=axes[1],
+    # 图2：讲解时长分布对比（使用完整数据，不受价格过滤影响）
+    sns.histplot(data=df, x='popduration', hue='爆品标签', ax=axes[1],
                  palette={'爆品': '#FF6B6B', '普通品': '#4ECDC4'},
                  kde=True, stat='density', common_norm=False, alpha=0.5)
     axes[1].set_title('讲解时长分布（带KDE）', fontsize=12)

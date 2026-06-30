@@ -35,10 +35,25 @@ PALETTE = {'爆品': BURST_COLOR, '普通品': NORMAL_COLOR}
 COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD']
 
 
+
+def restore_categorical(df):
+    """CSV 读取后恢复 Categorical 列的正确排序"""
+    if '价格区间' in df.columns:
+        order = ['0-50', '50-100', '100-200', '200-500', '500-1000', '1000+']
+        df['价格区间'] = pd.Categorical(df['价格区间'], categories=order, ordered=True)
+    if '讲解时长区间' in df.columns:
+        order = ['<2分钟', '2-5分钟', '5-10分钟', '10分钟+']
+        df['讲解时长区间'] = pd.Categorical(df['讲解时长区间'], categories=order, ordered=True)
+    if '直播间规模' in df.columns:
+        order = ['小直播间(<500)', '中型(500-2K)', '大型(2K-5K)', '头部(5K+)']
+        df['直播间规模'] = pd.Categorical(df['直播间规模'], categories=order, ordered=True)
+    return df
+
 def load_data():
     """加载带爆品标记的数据"""
     path = os.path.join(PROCESSED_DIR, 'burst_data.csv')
     df = pd.read_csv(path, encoding='utf-8')
+    df = restore_categorical(df)
     print(f"加载数据: {df.shape[0]} 行  x  {df.shape[1]} 列")
     return df
 
@@ -194,16 +209,21 @@ def compare_anchor(df):
     print(f"\n各主播爆品率排名（共 {len(anchor_stats)} 位主播）:")
     print(anchor_stats.to_string())
 
-    # 头部主播 vs 腰部主播
-    median_viewers = df['userbefore'].median()
-    big_anchor = df[df['userbefore'] >= median_viewers]
-    small_anchor = df[df['userbefore'] < median_viewers]
+    # 使用直播间规模字段对比（与报告和README保持一致）
+    if '直播间规模' in df.columns:
+        size_burst = df.groupby('直播间规模', observed=True).agg(
+            total=('是否爆品', 'count'),
+            burst_count=('是否爆品', 'sum')
+        )
+        size_burst['爆品率'] = (size_burst['burst_count'] / size_burst['total'] * 100).round(2)
+        print(f"\n各直播间规模爆品率:")
+        print(size_burst['爆品率'].to_string())
 
-    burst_rate_big = big_anchor['是否爆品'].mean() * 100
-    burst_rate_small = small_anchor['是否爆品'].mean() * 100
-    print(f"\n大型直播间（观众>={median_viewers:.0f}）爆品率: {burst_rate_big:.1f}%")
-    print(f"小型直播间（观众<{median_viewers:.0f}）爆品率: {burst_rate_small:.1f}%")
-    print(f"  → 倍数: {burst_rate_big / max(burst_rate_small, 0.01):.1f}倍")
+        best_size = size_burst['爆品率'].idxmax()
+        worst_size = size_burst['爆品率'].idxmin()
+        best_rate = size_burst.loc[best_size, '爆品率']
+        worst_rate = max(size_burst.loc[worst_size, '爆品率'], 0.01)
+        print(f"  → {best_size} 爆品率是 {worst_size} 的 {best_rate / worst_rate:.0f} 倍")
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -265,7 +285,6 @@ def compare_body_movement(df):
     print(f"  avg_dis 与 sales 的皮尔逊相关系数: r={r:.4f}, p={p:.2e}")
 
     # 检验倒U型关系：二次项回归
-    from numpy.polynomial import polynomial as P
     x = df['avg_dis'].values
     y = df['sales'].values
     # 多项式拟合（2次）

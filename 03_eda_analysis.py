@@ -34,12 +34,27 @@ sns.set_style('whitegrid')
 COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD']
 
 
+def restore_categorical(df):
+    """CSV 读取后恢复 Categorical 列的正确排序"""
+    if '价格区间' in df.columns:
+        order = ['0-50', '50-100', '100-200', '200-500', '500-1000', '1000+']
+        df['价格区间'] = pd.Categorical(df['价格区间'], categories=order, ordered=True)
+    if '讲解时长区间' in df.columns:
+        order = ['<2分钟', '2-5分钟', '5-10分钟', '10分钟+']
+        df['讲解时长区间'] = pd.Categorical(df['讲解时长区间'], categories=order, ordered=True)
+    if '直播间规模' in df.columns:
+        order = ['小直播间(<500)', '中型(500-2K)', '大型(2K-5K)', '头部(5K+)']
+        df['直播间规模'] = pd.Categorical(df['直播间规模'], categories=order, ordered=True)
+    return df
+
+
 def load_data():
     """加载清洗后的数据"""
     path = os.path.join(PROCESSED_DIR, 'cleaned_data.csv')
     if not os.path.exists(path):
         raise FileNotFoundError("请先运行 02_data_cleaner.py")
     df = pd.read_csv(path, encoding='utf-8')
+    df = restore_categorical(df)
     print(f"加载数据: {df.shape[0]} 行  x  {df.shape[1]} 列")
     return df
 

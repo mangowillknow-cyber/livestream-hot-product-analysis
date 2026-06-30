@@ -38,10 +38,25 @@ FIGURES_DIR = os.path.join(PROJECT_DIR, 'figures')
 COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1']
 
 
+
+def restore_categorical(df):
+    """CSV 读取后恢复 Categorical 列的正确排序"""
+    if '价格区间' in df.columns:
+        order = ['0-50', '50-100', '100-200', '200-500', '500-1000', '1000+']
+        df['价格区间'] = pd.Categorical(df['价格区间'], categories=order, ordered=True)
+    if '讲解时长区间' in df.columns:
+        order = ['<2分钟', '2-5分钟', '5-10分钟', '10分钟+']
+        df['讲解时长区间'] = pd.Categorical(df['讲解时长区间'], categories=order, ordered=True)
+    if '直播间规模' in df.columns:
+        order = ['小直播间(<500)', '中型(500-2K)', '大型(2K-5K)', '头部(5K+)']
+        df['直播间规模'] = pd.Categorical(df['直播间规模'], categories=order, ordered=True)
+    return df
+
 def load_data():
     """加载数据"""
     path = os.path.join(PROCESSED_DIR, 'burst_data.csv')
     df = pd.read_csv(path, encoding='utf-8')
+    df = restore_categorical(df)
     print(f"加载数据: {df.shape[0]} 行  x  {df.shape[1]} 列")
     return df
 
@@ -75,16 +90,12 @@ def prepare_features(df):
     X = df[feature_cols].copy()
     y = df[target_col].copy()
 
-    # 标准化
-    scaler = StandardScaler()
-    X_scaled = pd.DataFrame(scaler.fit_transform(X), columns=feature_cols)
-
     print(f"特征数量: {len(feature_cols)}")
     print(f"特征列: {feature_cols}")
     print(f"目标变量分布: 爆品={y.sum()}, 普通品={len(y)-y.sum()}")
     print(f"正样本比例: {y.mean()*100:.1f}%")
 
-    return X_scaled, y, feature_cols
+    return X, y, feature_cols
 
 
 def train_and_evaluate(X, y, feature_names):
@@ -104,6 +115,13 @@ def train_and_evaluate(X, y, feature_names):
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     print(f"\n训练集: {len(X_train)} 样本, 测试集: {len(X_test)} 样本")
+
+    # 标准化：仅在训练集上 fit，避免数据泄漏
+    scaler = StandardScaler()
+    X_train = pd.DataFrame(scaler.fit_transform(X_train),
+                            columns=feature_names, index=X_train.index)
+    X_test = pd.DataFrame(scaler.transform(X_test),
+                           columns=feature_names, index=X_test.index)
 
     results = {}
 
@@ -271,25 +289,33 @@ def plot_feature_importance(results, feature_names):
     print("【特征重要性分析】")
     print(f"{'='*60}")
 
-    # 汇总各模型特征重要性
+    # 汇总各模型特征重要性（排名法：各模型内排名后取平均排名）
     importance_df = pd.DataFrame({'特征': feature_names})
     for name, res in results.items():
         imp = res['feature_importance']
-        # 归一化到 0-1
+        # 归一化到 0-1 用于展示
         imp_norm = imp / imp.max() if imp.max() > 0 else imp
         importance_df[name] = imp_norm
+        # 各模型内排名（1=最重要）
+        importance_df[f'{name}_rank'] = pd.Series(imp_norm).rank(ascending=False).astype(int).values
 
-    importance_df['平均重要性'] = importance_df[list(results.keys())].mean(axis=1)
-    importance_df = importance_df.sort_values('平均重要性', ascending=False)
+    # 平均排名（跨模型，方法论上比直接平均归一化值更可靠）
+    rank_cols = [c for c in importance_df.columns if c.endswith('_rank')]
+    importance_df['平均排名'] = importance_df[rank_cols].mean(axis=1)
+    importance_df = importance_df.sort_values('平均排名')
+    # 平均归一化值用于可视化
+    model_names = list(results.keys())
+    importance_df['平均归一化'] = importance_df[model_names].mean(axis=1)
 
-    print("\n特征重要性排名:")
-    print(importance_df.to_string(index=False))
+    print("\n特征重要性排名（各模型内排名后取平均排名）:")
+    display_cols = ['特征'] + model_names + ['平均排名']
+    print(importance_df[display_cols].to_string(index=False))
 
     # Top5
     top5 = importance_df.head(5)
     print(f"\nTop5 影响爆品的关键因素:")
     for i, row in top5.iterrows():
-        print(f"  {row['特征']:<20s} 平均重要性: {row['平均重要性']:.4f}")
+        print(f"  {row['特征']:<20s} 平均排名: {row['平均排名']:.1f}")
 
     # 可视化
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -309,17 +335,17 @@ def plot_feature_importance(results, feature_names):
     axes[0].invert_yaxis()
 
     # 右图：Top5 平均特征重要性
-    top5_sorted = top5.sort_values('平均重要性', ascending=True)
+    top5_sorted = top5.sort_values('平均归一化', ascending=True)
     colors_top = ['#FF6B6B' if i == len(top5_sorted) - 1 else '#4ECDC4'
                   for i in range(len(top5_sorted))]
-    axes[1].barh(range(len(top5_sorted)), top5_sorted['平均重要性'],
+    axes[1].barh(range(len(top5_sorted)), top5_sorted['平均归一化'],
                   color=colors_top, edgecolor='white')
     axes[1].set_yticks(range(len(top5_sorted)))
     axes[1].set_yticklabels(top5_sorted['特征'])
-    axes[1].set_title('Top5 关键因素（平均重要性）', fontsize=12, fontweight='bold')
+    axes[1].set_title('Top5 关键因素（平均归一化重要性）', fontsize=12, fontweight='bold')
     axes[1].set_xlabel('平均归一化重要性')
     for i, (_, row) in enumerate(top5_sorted.iterrows()):
-        axes[1].text(row['平均重要性'] + 0.01, i, f"{row['平均重要性']:.3f}",
+        axes[1].text(row['平均归一化'] + 0.01, i, f"{row['平均归一化']:.3f}",
                      va='center', fontsize=10)
 
     plt.suptitle('特征重要性分析', fontsize=14, fontweight='bold')

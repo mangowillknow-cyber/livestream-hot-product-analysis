@@ -23,10 +23,25 @@ PROCESSED_DIR = os.path.join(PROJECT_DIR, 'data', 'processed')
 FIGURES_DIR = os.path.join(PROJECT_DIR, 'figures')
 
 
+
+def restore_categorical(df):
+    """CSV 读取后恢复 Categorical 列的正确排序"""
+    if '价格区间' in df.columns:
+        order = ['0-50', '50-100', '100-200', '200-500', '500-1000', '1000+']
+        df['价格区间'] = pd.Categorical(df['价格区间'], categories=order, ordered=True)
+    if '讲解时长区间' in df.columns:
+        order = ['<2分钟', '2-5分钟', '5-10分钟', '10分钟+']
+        df['讲解时长区间'] = pd.Categorical(df['讲解时长区间'], categories=order, ordered=True)
+    if '直播间规模' in df.columns:
+        order = ['小直播间(<500)', '中型(500-2K)', '大型(2K-5K)', '头部(5K+)']
+        df['直播间规模'] = pd.Categorical(df['直播间规模'], categories=order, ordered=True)
+    return df
+
 def load_data():
     """加载数据"""
     path = os.path.join(PROCESSED_DIR, 'burst_data.csv')
     df = pd.read_csv(path, encoding='utf-8')
+    df = restore_categorical(df)
     return df
 
 
@@ -77,6 +92,8 @@ def generate_report(df):
         best_price_rate = 0
 
     # 直播间规模
+    best_size = "N/A"
+    best_size_rate = 0
     if '直播间规模' in df.columns:
         size_burst_rate = df.groupby('直播间规模', observed=True).apply(
             lambda x: x['是否爆品'].mean() * 100
@@ -85,6 +102,8 @@ def generate_report(df):
         best_size_rate = size_burst_rate.max()
 
     # 时段
+    best_time = "N/A"
+    best_time_rate = 0
     if '时段' in df.columns:
         time_burst_rate = df.groupby('时段').apply(
             lambda x: x['是否爆品'].mean() * 100
@@ -102,8 +121,11 @@ def generate_report(df):
         best_dur_band = dur_burst_rate.idxmax()
         best_dur_rate = dur_burst_rate.max()
 
-    # 价格统计检验
-    t_stat, p_two = stats.ttest_ind(burst['price'], normal['price'], equal_var=False)
+    # 价格统计检验（单侧 Mann-Whitney U：H1 爆品价格 < 普通品价格）
+    _, p_price_one = stats.mannwhitneyu(burst['price'], normal['price'], alternative='less')
+    # 双侧 p 值用于报告展示
+    u_stat_price, p_price_two = stats.mannwhitneyu(burst['price'], normal['price'],
+                                                     alternative='two-sided')
 
     # 讲解时长统计检验
     u_stat, p_dur_test = stats.mannwhitneyu(burst['popduration'],
@@ -124,7 +146,7 @@ def generate_report(df):
 1. **价格特征**：爆品平均价格为{price_burst_mean:.0f}元，比普通品低{abs(price_diff_pct):.1f}%，{best_price_band}元区间爆品率最高（{best_price_rate:.1f}%）
 2. **讲解时长**：{best_dur_band}区间爆品率最高（{best_dur_rate:.1f}%），爆品平均讲解时长{dur_burst_mean/60:.1f}分钟
 3. **主播特征**：头部直播间（5K+观众）的爆品率高达{best_size_rate:.1f}%，主播身体动作与销量呈倒U型关系
-4. **关键因素**：观众规模是影响爆品的最重要因素（重要性0.92），其次是价格和讲解时长
+4. **关键因素**：观众规模是影响爆品的最重要因素，其次是价格和讲解时长
 
 ![数据分布概览](figures/01_distributions.png)
 
@@ -197,11 +219,11 @@ def generate_report(df):
 - 直播间并非越低价越好，存在最优价格区间
 
 **2. 直播间规模  x  爆品率**
-{f'- 最优规模：**{best_size}**（爆品率{best_size_rate:.1f}%）' if 'best_size' in dir() else ''}
+{f'- 最优规模：**{best_size}**（爆品率{best_size_rate:.1f}%）' if best_size != 'N/A' else ''}
 - 大型直播间的爆品率显著高于小型直播间
 
 **3. 讲解时长  x  爆品率**
-- **2-5分钟**区间爆品率最高（{best_dur_rate:.1f}%），并非讲解越长越好——过长讲解（10分钟+）反而爆品率最低
+- **{best_dur_band}**区间爆品率最高（{best_dur_rate:.1f}%），并非讲解越长越好——过长讲解（10分钟+）反而爆品率最低
 
 **4. 主播身体动作  x  销量（论文核心假设）**
 - 主播身体动作(avg_dis)与销量的相关系数：r={r_dis:.4f}
@@ -218,10 +240,10 @@ def generate_report(df):
 ## 五、统计检验结论
 
 ### 假设1：爆品价格是否显著低于普通品？
-- 检验方法：Welch T检验（不等方差）
+- 检验方法：Mann-Whitney U检验（单侧，H1: 爆品价格 < 普通品）
 - 爆品均值：{price_burst_mean:.2f}元，普通品均值：{price_normal_mean:.2f}元
-- t统计量：{t_stat:.4f}，p值：{p_two:.4e}
-- **{'差异显著（p<0.05）' if p_two < 0.05 else '差异不显著（p≥0.05）'}**
+- U统计量：{u_stat_price:.0f}，单侧p值：{p_price_one:.4e}
+- **{'差异显著（p<0.05）' if p_price_one < 0.05 else '差异不显著（p≥0.05）'}**
 
 ### 假设2：爆品讲解时长是否显著高于普通品？
 - 检验方法：Mann-Whitney U检验（单侧）
@@ -235,7 +257,7 @@ def generate_report(df):
 
 ### 业务启示
 1. 价格差异是显著的，但**并非越低越好**——中等价位商品反而更容易成为爆品
-2. 讲解时长差异显著（p<0.05），但爆品的讲解时长反而**更短**（293秒 vs 363秒），说明精准高效的讲解比冗长讲解更有效
+2. 讲解时长差异显著，但爆品的讲解时长反而**更短**（{dur_burst_mean:.0f}秒 vs {dur_normal_mean:.0f}秒），说明精准高效的讲解比冗长讲解更有效
 3. 主播动作与销量存在**倒U型关系**，过度活跃反而不利于转化
 
 ![统计检验](figures/13_statistical_tests.png)
@@ -259,7 +281,7 @@ def generate_report(df):
 大型直播间（观众>{df['userbefore'].median():.0f}人）的爆品率显著高于小型直播间，选择与观众基础较大的直播间合作可以提高爆品概率。
 
 ### 建议5：关注直播时段
-{f'优先安排在{best_time}时段直播（爆品率{best_time_rate:.1f}%）' if 'best_time' in dir() else '根据数据选择最优直播时段'}。
+{f'优先安排在{best_time}时段直播（爆品率{best_time_rate:.1f}%）' if best_time != 'N/A' else '根据数据选择最优直播时段'}。
 
 ---
 
